@@ -1,0 +1,225 @@
+name: Build OpenWrt IPQ NSS ECM for QNAP 301W
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_options:
+        description: '编译选项 (可选)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 0 * * 0'
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/qosmio/openwrt-ipq.git
+  REPO_BRANCH: 24.10-nss
+  DEVICE_TARGET: qualcommax
+  DEVICE_SUBTARGET: ipq807x
+  DEVICE_PROFILE: qnap_301w
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Initialize Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install -y build-essential clang flex bison g++ gawk \
+          gcc-multilib g++-multilib gettext libncurses5-dev libssl-dev \
+          python3 python3-pip python3-venv python3-distutils \
+          rsync unzip zlib1g-dev file wget perl \
+          libextutils-makemaker-cpanfile-perl libextutils-pkgconfig-perl
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        
+    - name: Clone Source Code
+      run: |
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+        cd openwrt
+        echo "OPENWRT_ROOT=$(pwd)" >> $GITHUB_ENV
+        
+    - name: Update Feeds
+      run: |
+        cd $OPENWRT_ROOT
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a --force
+        
+    - name: Generate Config
+      run: |
+        cd $OPENWRT_ROOT
+        cat > .config <<EOF
+        # 目标设备配置
+        CONFIG_TARGET_qualcommax=y
+        CONFIG_TARGET_qualcommax_ipq807x=y
+        CONFIG_TARGET_qualcommax_ipq807x_DEVICE_qnap_301w=y
+        
+        # NSS 数据平面
+        CONFIG_PACKAGE_kmod-qca-nss-dp=y
+        
+        # NSS 核心驱动
+        CONFIG_PACKAGE_kmod-qca-nss-drv=y
+        CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y
+        CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr=y
+        
+        # NSS ECM 驱动（硬件加速核心）
+        CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+        CONFIG_PACKAGE_kmod-qca-nss-ecm-premium=y
+        
+        # NSS IPsec 管理器
+        CONFIG_PACKAGE_kmod-qca-nss-drv-ipsecmgr=y
+        CONFIG_PACKAGE_kmod-qca-nss-drv-ipsecmgr-xfrm=y
+        
+        # NSS GMAC 驱动
+        CONFIG_PACKAGE_kmod-qca-nss-gmac=y
+        
+        # NSS MACsec 支持
+        CONFIG_PACKAGE_kmod-qca-nss-macsec=y
+        
+        # NSS 固件
+        CONFIG_PACKAGE_nss-firmware-ipq8074=y
+        
+        # NSS 工具
+        CONFIG_PACKAGE_nss-utils=y
+        
+        # WiFi 支持
+        CONFIG_PACKAGE_ath11k-firmware-ipq8074=y
+        CONFIG_PACKAGE_kmod-ath11k-ahb=y
+        CONFIG_PACKAGE_ipq-wifi-qnap_301w=y
+        
+        # 基础系统
+        CONFIG_PACKAGE_base-files=y
+        CONFIG_PACKAGE_ca-bundle=y
+        CONFIG_PACKAGE_libc=y
+        CONFIG_PACKAGE_libgcc=y
+        CONFIG_PACKAGE_libustream-openssl=y
+        CONFIG_PACKAGE_logd=y
+        CONFIG_PACKAGE_mtd=y
+        CONFIG_PACKAGE_netifd=y
+        CONFIG_PACKAGE_opkg=y
+        CONFIG_PACKAGE_procd-ujail=y
+        CONFIG_PACKAGE_uci=y
+        CONFIG_PACKAGE_uclient-fetch=y
+        CONFIG_PACKAGE_urandom-seed=y
+        CONFIG_PACKAGE_urngd=y
+        
+        # 核心功能
+        CONFIG_PACKAGE_autocore=y
+        CONFIG_PACKAGE_automount=y
+        CONFIG_PACKAGE_block-mount=y
+        CONFIG_PACKAGE_default-settings-chn=y
+        CONFIG_PACKAGE_fstools=y
+        CONFIG_PACKAGE_losetup=y
+        
+        # 网络 - 禁用 dnsmasq，只使用 dnsmasq-full
+        CONFIG_PACKAGE_dnsmasq=n
+        CONFIG_PACKAGE_dnsmasq-full=y
+        CONFIG_PACKAGE_dropbear=y
+        CONFIG_PACKAGE_firewall4=y
+        CONFIG_PACKAGE_nftables=y
+        CONFIG_PACKAGE_kmod-nf-nathelper=y
+        CONFIG_PACKAGE_kmod-nf-nathelper-extra=y
+        CONFIG_PACKAGE_kmod-nft-offload=y
+        CONFIG_PACKAGE_odhcp6c=y
+        CONFIG_PACKAGE_odhcpd-ipv6only=y
+        CONFIG_PACKAGE_ppp=y
+        CONFIG_PACKAGE_ppp-mod-pppoe=y
+        
+        # USB 支持
+        CONFIG_PACKAGE_kmod-usb-dwc3=y
+        CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y
+        CONFIG_PACKAGE_kmod-usb3=y
+        
+        # GPIO/LED
+        CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+        CONFIG_PACKAGE_kmod-leds-gpio=y
+        
+        # 网卡驱动
+        CONFIG_PACKAGE_kmod-phy-aquantia=y
+        
+        # 文件系统
+        CONFIG_PACKAGE_kmod-fs-f2fs=y
+        CONFIG_PACKAGE_f2fs-tools=y
+        
+        # U-Boot 工具
+        CONFIG_PACKAGE_uboot-envtools=y
+        
+        # WiFi 认证
+        CONFIG_PACKAGE_wpad-openssl=y
+        
+        # LuCI 界面
+        CONFIG_PACKAGE_luci-light=y
+        CONFIG_PACKAGE_luci-app-cpufreq=y
+        CONFIG_PACKAGE_luci-app-package-manager=y
+        CONFIG_PACKAGE_luci-compat=y
+        CONFIG_PACKAGE_luci-lib-base=y
+        CONFIG_PACKAGE_luci-lib-ipkg=y
+        
+        # LuCI ECM 插件
+        CONFIG_PACKAGE_luci-app-ecm=y
+        CONFIG_PACKAGE_luci-i18n-ecm-zh-cn=y
+        
+        # NSS 相关内核选项
+        CONFIG_KERNEL_SKB_RECYCLER=y
+        CONFIG_KERNEL_SKB_RECYCLER_MULTI_CPU=y
+        CONFIG_KERNEL_NF_CONNTRACK_EVENTS=y
+        CONFIG_KERNEL_NF_CONNTRACK_TIMEOUT=y
+        CONFIG_KERNEL_NF_CONNTRACK_TIMESTAMP=y
+        EOF
+        make defconfig
+        
+    - name: Download Packages
+      run: |
+        cd $OPENWRT_ROOT
+        make download -j$(nproc)
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+        
+    - name: Compile Firmware
+      env:
+        TERM: xterm
+      run: |
+        cd $OPENWRT_ROOT
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-ipq-nss-ecm-qnap-301w
+        path: |
+          openwrt/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/*
+          
+    - name: Create Release
+      if: github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: qnap-301w-nss-ecm-${{ github.run_number }}
+        name: OpenWrt IPQ NSS ECM for QNAP 301W #${{ github.run_number }}
+        body: |
+          自动编译的 OpenWrt IPQ 固件（完整 NSS + ECM 加速）
+          目标设备：QNAP QHora-301W
+          源码：https://github.com/qosmio/openwrt-ipq (24.10-nss 分支)
+          内核：6.6
+          
+          包含功能：
+          - 完整 NSS 驱动加速（ECM/GMAC/VLAN/PPPoE/IPsec）
+          - ECM Premium 连接管理器（硬件加速核心）
+          - IPsec 管理器（VPN 硬件加速）
+          - WiFi 6 (ath11k) 驱动
+          - LuCI 管理界面 + ECM 状态插件
+          - USB 3.0 支持
+          - F2FS 文件系统
+          - 万兆网卡驱动 (Aquantia)
+          - NSS 固件和工具
+        files: |
+          openwrt/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/*
