@@ -63,9 +63,9 @@ jobs:
         CONFIG_PACKAGE_automount=y
         CONFIG_PACKAGE_block-mount=y
         CONFIG_PACKAGE_default-settings-chn=y
+        # 显式禁用 dnsmasq，只使用 dnsmasq-full
+        CONFIG_PACKAGE_dnsmasq=n
         CONFIG_PACKAGE_dnsmasq-full=y
-        # 注意：不要同时启用 dnsmasq 和 dnsmasq-full，会冲突
-        # CONFIG_PACKAGE_dnsmasq is not set
         CONFIG_PACKAGE_dropbear=y
         CONFIG_PACKAGE_firewall4=y
         CONFIG_PACKAGE_fstools=y
@@ -189,7 +189,11 @@ jobs:
         EOF
         
     - name: Make defconfig
-      run: make defconfig
+      run: |
+        make defconfig
+        # 清理可能存在的冲突配置
+        sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/' .config
+        make defconfig
       
     - name: Download packages
       run: |
