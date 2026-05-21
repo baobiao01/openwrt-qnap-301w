@@ -1,14 +1,11 @@
-name: Build ImmortalWrt 6.6 for QNAP 301W
+name: Build-QNAP-301W-6.6-NSS-ECM
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * 0'
 
 env:
-  REPO_URL: https://github.com/VIKINGYFY/immortalwrt.git
-  REPO_BRANCH: main
-  COMMIT_HASH: ce68f61cb67a4701a108f838f510e72ca63ed78e
+  REPO_URL: https://github.com/qosmio/openwrt-ipq.git
+  REPO_BRANCH: 24.10-nss
   DEVICE_TARGET: qualcommax
   DEVICE_SUBTARGET: ipq807x
   DEVICE_PROFILE: qnap_301w
@@ -19,10 +16,13 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: Checkout
+    - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Initialize Environment
+      with:
+        repository: qosmio/openwrt-ipq
+        ref: 24.10-nss
+        
+    - name: Install dependencies
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -35,64 +35,159 @@ jobs:
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         
-    - name: Clone Source Code
+    - name: Check kernel version
       run: |
-        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
-        cd openwrt
-        git checkout $COMMIT_HASH
-        echo "OPENWRT_ROOT=$(pwd)" >> $GITHUB_ENV
+        echo "Current kernel patchver:"
+        cat target/linux/qualcommax/Makefile | grep KERNEL_PATCHVER || true
+        echo ""
+        echo "Available kernel configs:"
+        ls -la target/linux/qualcommax/config-* 2>/dev/null || true
         
-    - name: Update Feeds
+    - name: Update feeds
       run: |
-        cd $OPENWRT_ROOT
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-    - name: Generate Config
+    - name: Generate config
       run: |
-        cd $OPENWRT_ROOT
-        cat > .config <<EOF
-        CONFIG_TARGET_${DEVICE_TARGET}=y
-        CONFIG_TARGET_${DEVICE_TARGET}_${DEVICE_SUBTARGET}=y
-        CONFIG_TARGET_${DEVICE_TARGET}_${DEVICE_SUBTARGET}_DEVICE_${DEVICE_PROFILE}=y
+        cat > .config << 'EOF'
+        # Target
+        CONFIG_TARGET_qualcommax=y
+        CONFIG_TARGET_qualcommax_ipq807x=y
+        CONFIG_TARGET_qualcommax_ipq807x_DEVICE_qnap_301w=y
+        
+        # NSS 核心驱动 - 必须启用
+        CONFIG_PACKAGE_kmod-qca-nss-dp=y
+        CONFIG_PACKAGE_kmod-qca-nss-drv=y
+        CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+        CONFIG_PACKAGE_kmod-qca-nss-gmac=y
+        CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y
+        CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr=y
+        
+        # SSDK
+        CONFIG_PACKAGE_kmod-qca-ssdk=y
+        
+        # 基本系统
         CONFIG_PACKAGE_luci=y
         CONFIG_PACKAGE_luci-ssl=y
         CONFIG_PACKAGE_luci-app-firewall=y
         CONFIG_PACKAGE_luci-app-opkg=y
-        EOF
-        make defconfig
         
-    - name: Download Packages
+        # NSS 状态显示 - 在 LuCI 首页展示 NSS/ECM 占用
+        CONFIG_PACKAGE_luci-app-nss=y
+        CONFIG_PACKAGE_qca-nss-fw-ipq8074=y
+        
+        # 网络工具
+        CONFIG_PACKAGE_htop=y
+        CONFIG_PACKAGE_iperf3=y
+        CONFIG_PACKAGE_tcpdump=y
+        CONFIG_PACKAGE_nano=y
+        CONFIG_PACKAGE_curl=y
+        CONFIG_PACKAGE_wget-ssl=y
+        
+        # USB 支持
+        CONFIG_PACKAGE_kmod-usb3=y
+        CONFIG_PACKAGE_kmod-usb-dwc3=y
+        CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y
+        CONFIG_PACKAGE_kmod-usb-storage=y
+        CONFIG_PACKAGE_kmod-usb-storage-uas=y
+        
+        # 文件系统
+        CONFIG_PACKAGE_kmod-fs-ext4=y
+        CONFIG_PACKAGE_kmod-fs-ntfs=y
+        CONFIG_PACKAGE_kmod-fs-vfat=y
+        CONFIG_PACKAGE_e2fsprogs=y
+        CONFIG_PACKAGE_ntfs-3g=y
+        CONFIG_PACKAGE_blkid=y
+        
+        # WiFi
+        CONFIG_PACKAGE_kmod-ath11k-ahb=y
+        CONFIG_PACKAGE_wpad-basic-mbedtls=y
+        CONFIG_PACKAGE_hostapd-utils=y
+        
+        # 其他基础包
+        CONFIG_PACKAGE_kmod-leds-gpio=y
+        CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+        CONFIG_PACKAGE_uboot-envtools=y
+        CONFIG_PACKAGE_losetup=y
+        
+        # 常用软件
+        CONFIG_PACKAGE_luci-app-upnp=y
+        CONFIG_PACKAGE_luci-app-ddns=y
+        CONFIG_PACKAGE_luci-app-sqm=y
+        CONFIG_PACKAGE_luci-app-statistics=y
+        CONFIG_PACKAGE_luci-app-vlmcsd=y
+        
+        # 系统监控
+        CONFIG_PACKAGE_lm-sensors=y
+        CONFIG_PACKAGE_lm-sensors-detect=y
+        
+        # 压缩工具
+        CONFIG_PACKAGE_zlib=y
+        CONFIG_PACKAGE_libopenssl=y
+        
+        # IPv6 支持
+        CONFIG_PACKAGE_ipv6helper=y
+        CONFIG_PACKAGE_kmod-ipt-nat6=y
+        
+        # 防火墙增强
+        CONFIG_PACKAGE_iptables-mod-extra=y
+        CONFIG_PACKAGE_kmod-ipt-extra=y
+        EOF
+        
+    - name: Make defconfig
+      run: make defconfig
+      
+    - name: Download packages
       run: |
-        cd $OPENWRT_ROOT
         make download -j$(nproc)
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
         
-    - name: Compile Firmware
+    - name: Compile firmware
       env:
         TERM: xterm
       run: |
-        cd $OPENWRT_ROOT
         make -j$(nproc) || make -j1 || make -j1 V=s
         
-    - name: Upload Artifact
+    - name: Check compiled files
+      run: |
+        echo "=== Checking compiled files ==="
+        echo "Current directory: $(pwd)"
+        echo ""
+        echo "Contents of bin directory:"
+        ls -la bin/ 2>/dev/null || echo "bin/ not found"
+        echo ""
+        echo "Contents of bin/targets:"
+        ls -la bin/targets/ 2>/dev/null || echo "bin/targets/ not found"
+        echo ""
+        echo "Contents of bin/targets/qualcommax:"
+        ls -la bin/targets/qualcommax/ 2>/dev/null || echo "bin/targets/qualcommax/ not found"
+        echo ""
+        echo "Contents of bin/targets/qualcommax/ipq807x:"
+        ls -la bin/targets/qualcommax/ipq807x/ 2>/dev/null || echo "bin/targets/qualcommax/ipq807x/ not found"
+        echo ""
+        echo "All firmware files:"
+        find bin/ -type f 2>/dev/null | head -30 || echo "No files found"
+        
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: immortalwrt-qnap-301w-6.6
+        name: QNAP-301W-6.6-NSS-ECM
         path: |
-          openwrt/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/*
-          
-    - name: Create Release
-      if: github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v2
+          bin/targets/qualcommax/ipq807x/*
+        if-no-files-found: warn
+        
+    - name: Upload specific firmware files
+      if: always()
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: qnap-301w-6.6-${{ github.run_number }}
-        name: ImmortalWrt 6.6 for QNAP 301W #${{ github.run_number }}
-        body: |
-          自动编译的 ImmortalWrt 6.6 固件
-          目标设备：QNAP QHora-301W
-          内核版本：6.6
-          源码提交：${{ env.COMMIT_HASH }}
-        files: |
-          openwrt/bin/targets/${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}/*
+        name: QNAP-301W-firmware-files
+        path: |
+          bin/targets/qualcommax/ipq807x/*.bin
+          bin/targets/qualcommax/ipq807x/*.img
+          bin/targets/qualcommax/ipq807x/*.itb
+          bin/targets/qualcommax/ipq807x/*.ubi
+          bin/targets/qualcommax/ipq807x/*.tar.gz
+          bin/targets/qualcommax/ipq807x/*.squashfs
+        if-no-files-found: warn
